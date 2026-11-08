@@ -826,6 +826,8 @@ local function localWeatherBadge()
   if not (sst and sst.localTime) and not m then return nil end
   return {
     localTime = sst and sst.localTime or nil,
+    -- Follow the scene's night-light state, including manual time changes, not fixed clock hours.
+    isNight = require('beamngEarth/nightlights').isNight(),
     code = m and m.code or nil,
     tempC = m and (m.tempC or m.slTempC) or nil,
     metric = require('beamngEarth/gps').metric(),      -- (the game's unit: the badge's °C or °F)

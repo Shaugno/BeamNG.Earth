@@ -152,11 +152,12 @@ export function searchPlaces(list, query, limit = 8) {
 
 // A WMO weather code (settings.uiMapState's weather.code, from weather.lua's last message) as one emoji, the
 // same buckets as weather.lua's M.describe (clear / cloud / fog / rain / snow / showers / storm).
-export function weatherIcon(code) {
+// isNight is the stock environment's night-light state; absent on older clients / before a scene is ready.
+export function weatherIcon(code, isNight) {
   code = Number(code)
   if (!Number.isFinite(code)) return ""
-  if (code === 0) return "☀️"             // clear sky
-  if (code <= 2) return "🌤️"         // mainly clear / partly cloudy
+  if (code === 0) return isNight === true ? "🌙" : "☀️" // clear sky
+  if (code <= 2) return isNight === true ? "☁️" : "🌤️" // mainly clear / partly cloudy
   if (code === 3) return "☁️"              // overcast
   if (code === 45 || code === 48) return "🌫️"   // fog
   if (code >= 95) return "⛈️"              // thunderstorm

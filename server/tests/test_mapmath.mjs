@@ -1,6 +1,8 @@
 // The world map's tile math (mod ui/ui-vue/mods/beamngEarth/mapmath.js). Run: node server/tests/test_mapmath.mjs
 // (server/tests/test_maptiles.py runs it too when node is installed).
 import assert from "node:assert/strict"
+import { readFileSync } from "node:fs"
+import { runInNewContext } from "node:vm"
 import * as m from "../../mod/beamng_earth/ui/ui-vue/mods/beamngEarth/mapmath.js"
 
 const near = (a, b, eps, what) => assert.ok(Math.abs(a - b) <= eps, `${what}: ${a} vs ${b}`)
@@ -168,7 +170,39 @@ console.log("mapmath ok")
   assert.equal(m.weatherIcon(95), "⛈️")
   assert.equal(m.weatherIcon(73), "❄️")
   assert.equal(m.weatherIcon(undefined), "")
+  assert.equal(m.weatherIcon(0, true), "🌙", "clear night uses a moon")
+  for (const code of [1, 2]) {
+    assert.equal(m.weatherIcon(code, true), "☁️", "cloudy night has no sun")
+    assert.equal(m.weatherIcon(code, false), "🌤️", "cloudy day keeps its sun")
+  }
+  assert.equal(m.weatherIcon("0", true), "🌙", "numeric weather codes still work")
+  for (const unknown of [undefined, null, "true", 1]) {
+    assert.equal(m.weatherIcon(0, unknown), "☀️", "only explicit night changes the icon")
+  }
+  for (const code of [0, 1, 2, 3, 45, 48, 51, 55, 63, 67, 71, 73, 77, 80, 85, 95, 99]) {
+    assert.equal(m.weatherIcon(code, false), m.weatherIcon(code), "day preserves existing icons")
+    if (code > 2) assert.equal(m.weatherIcon(code, true), m.weatherIcon(code), "other conditions unchanged")
+  }
+  assert.equal(m.weatherIcon(undefined, true), "", "night alone cannot invent weather")
   console.log("mapmath weather icon ok")
+}
+
+// Exercise the real Vue badge computation without mounting the game UI: the night field must reach mapmath.
+{
+  const vue = readFileSync(new URL("../../mod/beamng_earth/ui/ui-vue/mods/beamngEarth/EarthMap.vue", import.meta.url), "utf8")
+  const body = vue.match(/const weatherBadge = computed\(\(\) => \{([\s\S]*?)\n\}\)/)?.[1]
+  assert.ok(body, "weather badge computation exists")
+  const badge = weather => runInNewContext(`(() => {${body}\n})()`, { state: { value: { weather } }, mm: m })
+  assert.equal(badge({ code: 0, isNight: true, localTime: "12:00", metric: true, tempC: 12 }).icon, "🌙")
+  assert.equal(badge({ code: 0, isNight: false, localTime: "00:00" }).icon, "☀️")
+  assert.equal(badge({ code: 2, isNight: true }).icon, "☁️")
+  assert.equal(badge({ code: 0 }).icon, "☀️", "older state without isNight remains usable")
+  assert.equal(badge({ isNight: true, localTime: "00:00" }).icon, "", "clock only: no invented weather")
+  assert.equal(badge({ code: 0, isNight: true, metric: true, tempC: 12 }).temp, "12°C")
+  assert.equal(badge({ code: 0, isNight: true, metric: false, tempC: 0 }).temp, "32°F")
+  assert.equal(badge(null), null)
+  assert.equal(badge({ isNight: true }), null)
+  console.log("mapmath Vue weather badge wiring ok (unmounted)")
 }
 
 // the cache view's grid (covermap.py cache_map): zoom, box, decoding and classes
