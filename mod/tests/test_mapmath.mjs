@@ -1,6 +1,9 @@
 // node mod/tests/test_mapmath.mjs  (mapmath.js: the world map's stand-in tiles while zooming)
 import * as mm from "../beamng_earth/ui/ui-vue/mods/beamngEarth/mapmath.js"
 import assert from "node:assert"
+import { readFileSync } from "node:fs"
+import test from "node:test"
+import { runInNewContext } from "node:vm"
 const tiles = mm.visibleTiles(39.28, -76.59, 10.5, 1280, 720)
 const z = tiles[0].z
 // nothing ready: no stand-ins
@@ -68,4 +71,66 @@ console.log("mapmath fallback ok:", fb.length, "stand-ins for", tiles.length, "t
   assert.deepEqual(mm.searchList([{ name: "Home" }], {}).map(p => p.name), ["Home"])
   console.log("mapmath search list ok")
 }
+
+// Run the component's script with a stubbed UI bridge and clock. This covers the entry path without BeamNG's Vue bundle.
+function openMap(props = { embedded: false }, reducedMotion = false) {
+  const vue = readFileSync(new URL("../beamng_earth/ui/ui-vue/mods/beamngEarth/EarthMap.vue", import.meta.url), "utf8")
+  const script = vue.split("<script setup>")[1].split("</script>")[0].replace(/^import .+$/gm, "")
+  const frames = new Map()
+  let time = 0, frameId = 0, refresh, mount
+  const player = { lat: 21, lon: 179.99 }
+  const ref = value => ({ value })
+  const map = runInNewContext(script + "\n;({ view, viewEl, wanted, zoomBy })", {
+    mm, ref, shallowRef: ref,
+    computed: fn => ({ get value() { return fn() } }),
+    defineProps: () => props,
+    onMounted: fn => { mount = fn },
+    watch() {}, onUnmounted() {}, nextTick() {},
+    useEvents: () => ({ on() {} }),
+    layerData: { borders: [], states: [], countries: [], places: [] },
+    setTimeout() {}, clearTimeout() {},
+    setInterval: fn => { refresh = fn },
+    performance: { now: () => time },
+    window: {
+      bngApi: { engineLua: (command, cb) => { if (cb) cb({ player, mapPort: 1 }) } },
+      matchMedia: () => ({ matches: reducedMotion }),
+      requestAnimationFrame: fn => { frames.set(++frameId, fn); return frameId },
+    },
+  })
+  map.viewEl.value = { addEventListener() {} }
+  mount()
+  return { ...map, player, refresh, frames, step(ms) {
+    time += ms
+    const pending = [...frames.values()]
+    frames.clear()
+    for (const fn of pending) fn(time)
+  } }
+}
+
+test("2D map opens by zooming out from the car once and yields to manual zoom", () => {
+  const map = openMap()
+  assert.equal(map.view.value.lat, map.player.lat)
+  assert.equal(map.view.value.lon, map.player.lon)
+  const initial = map.view.value.z
+  assert.ok(initial > 12, "opens close to the car")
+  assert.ok(map.wanted.value.length && map.wanted.value.every(t => t.z === 12), "uses the final imagery level")
+  map.step(300)
+  assert.ok(map.view.value.z < initial && map.view.value.z > 12, "zooms out across frames")
+  map.step(700)
+  assert.equal(map.view.value.z, 12)
+  map.refresh()
+  assert.equal(map.frames.size, 0, "polling does not replay the animation")
+
+  const manual = openMap()
+  manual.zoomBy(-1)
+  const zoom = manual.view.value.z
+  manual.step(300)
+  assert.equal(manual.view.value.z, zoom, "manual zoom takes over")
+  assert.equal(manual.frames.size, 0)
+
+  for (const map of [openMap({ embedded: true }), openMap({ embedded: false }, true)]) {
+    assert.equal(map.view.value.z, 12)
+    assert.equal(map.frames.size, 0)
+  }
+})
 

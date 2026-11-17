@@ -455,6 +455,8 @@ const searchMsg = ref("")
 const cursor = ref(null)
 const tileErrors = ref(0), tileLoads = ref(0)
 const seenPlayer = ref(false)
+const OPEN_ZOOM = 12, OPEN_NEAR_ZOOM = 16, OPEN_ZOOM_MS = 650
+const openingFrame = ref(null)
 let pollTimer = null, resizeObs = null
 let drag = null
 
@@ -466,6 +468,7 @@ function engineLua(script, cb) {
 // ---- state from Lua (every second) -------------------------------------------------------
 function poll() {
   engineLua("beamngEarth_settings and beamngEarth_settings.uiMapState and beamngEarth_settings.uiMapState() or nil", s => {
+    if (!viewEl.value) return
     if (!s) { state.value = { places: [], recent: [], missing: true }; return }
     state.value = { ...s, places: toArray(s.places), recent: toArray(s.recent) }
     if (!s.others && playersPanel.value) closePlayers()   // (out of the session: not open again by itself in the next)
@@ -474,8 +477,12 @@ function poll() {
       if (o) glideTo(o.lat, o.lon)
       else { follow.value = false; showToast("That player is no longer on the map") }
     } else if (s.player && follow.value) {
-      centreOn(s.player.lat, s.player.lon, seenPlayer.value ? view.value.z : 12)
-      seenPlayer.value = true
+      if (!seenPlayer.value) {
+        seenPlayer.value = true
+        startOpeningZoom(s.player)
+      } else if (openingFrame.value === null) {
+        centreOn(s.player.lat, s.player.lon, view.value.z)
+      }
     }
   })
 }
@@ -488,6 +495,30 @@ function centreOn(lat, lon, z) {
     if (Math.abs(a.x - b.x) < 0.5 && Math.abs(a.y - b.y) < 0.5) return
   }
   view.value = { lat, lon, z }
+}
+
+function startOpeningZoom(player) {
+  if (embedded || !window.requestAnimationFrame || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+    centreOn(player.lat, player.lon, OPEN_ZOOM)
+    return
+  }
+  centreOn(player.lat, player.lon, OPEN_NEAR_ZOOM)
+  let lastView = view.value
+  const started = performance.now()
+  function step(now) {
+    // A manual pan or zoom owns the view as soon as it changes.
+    if (follow.value !== true || view.value !== lastView) {
+      openingFrame.value = null
+      return
+    }
+    const t = Math.max(0, Math.min(1, (now - started) / OPEN_ZOOM_MS))
+    const z = OPEN_ZOOM + (OPEN_NEAR_ZOOM - OPEN_ZOOM) * (1 - t) ** 3
+    const car = state.value.player || lastView
+    centreOn(car.lat, car.lon, z)
+    lastView = view.value
+    openingFrame.value = t < 1 ? window.requestAnimationFrame(step) : null
+  }
+  openingFrame.value = window.requestAnimationFrame(step)
 }
 
 // Tiles are files the server writes into the game's temp folder on request (the game's UI browser cancels every
@@ -516,7 +547,9 @@ const tileBase = computed(() => (state.value.mapPort ? TILE_DIR : null))
 const wanted = computed(() => {
   if (!tileBase.value) return []
   const v = view.value
-  return mm.visibleTiles(v.lat, v.lon, v.z, w.value, h.value)
+  // Use the destination's imagery level throughout the brief pullback, so it can reuse the same tiles.
+  const tz = openingFrame.value === null ? undefined : OPEN_ZOOM
+  return mm.visibleTiles(v.lat, v.lon, v.z, w.value, h.value, tz)
 })
 // the missing tiles, nearest the centre first (each tile's base, then its labels)
 function missingTiles() {
@@ -1913,6 +1946,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   clearInterval(pollTimer)
+  if (openingFrame.value !== null) window.cancelAnimationFrame(openingFrame.value)
   if (resizeObs) resizeObs.disconnect()
   window.removeEventListener("mousemove", onMove)
   window.removeEventListener("mouseup", onUp)

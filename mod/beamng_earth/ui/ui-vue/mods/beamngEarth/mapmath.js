@@ -32,10 +32,9 @@ export function unproject(x, y, z) {
 }
 
 // The tiles covering a w x h view centred on (lat, lon) at fractional zoom z: the integer tile zoom
-// tz = floor(z) and each tile's screen rect (scaled by 2^(z - tz)). x wraps around the world; rows
+// tz = floor(z) by default and each tile's screen rect is scaled by 2^(z - tz). x wraps around the world; rows
 // outside it are left out.
-export function visibleTiles(lat, lon, z, w, h) {
-  const tz = Math.max(0, Math.floor(z))
+export function visibleTiles(lat, lon, z, w, h, tz = Math.max(0, Math.floor(z))) {
   const scale = Math.pow(2, z - tz)
   const c = project(lat, lon, tz)
   const size = TILE * scale
